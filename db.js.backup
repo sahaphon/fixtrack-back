@@ -1,0 +1,1156 @@
+const mysql = require('mysql2/promise')
+const { view } = require('./utils/views')
+const { checkUndefined } = require('./utils/checkUndefined')  
+const { dbConfig } = require('./config')
+const moment = require('moment')
+
+// Create connection pool for better performance and connection management
+let pool = null
+let isInitialized = false
+
+// Initialize connection pool
+const initializePool = () => {
+    if (!pool) {
+        pool = mysql.createPool({
+            ...dbConfig,
+            // Additional pool-specific settings
+            waitForConnections: true,
+            queueLimit: 0,
+            // Connection health check
+            ping: true,
+            // Automatic reconnection
+            reconnect: true,
+            // Connection idle timeout (8 hours)
+            idleTimeout: 28800000,
+            // Connection lifetime (24 hours)
+            maxLifetime: 86400000,
+        })
+
+        // Handle pool events
+        pool.on('connection', (connection) => {
+            console.log(`New MySQL connection established as ID ${connection.threadId}`)
+        })
+
+        pool.on('error', (err) => {
+            console.error('MySQL pool error:', err)
+            if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+                console.log('Attempting to reconnect to MySQL...')
+            }
+        })
+
+        pool.on('release', (connection) => {
+            console.log(`Connection ${connection.threadId} released back to pool`)
+        })
+
+        isInitialized = true
+        console.log('MySQL connection pool initialized successfully')
+    }
+    return pool
+}
+
+// Get connection from pool
+const getConnection = async () => {
+    if (!pool) {
+        initializePool()
+    }
+    
+    try {
+        const connection = await pool.getConnection()
+        return connection
+    } catch (error) {
+        console.error('Error getting connection from pool:', error)
+        throw error
+    }
+}
+
+// Test database connection
+const testConnection = async () => {
+    try {
+        const connection = await getConnection()
+        await connection.ping()
+        connection.release()
+        console.log('Database connection test successful')
+        return true
+    } catch (error) {
+        console.error('Database connection test failed:', error)
+        return false
+    }
+}
+
+// Initialize pool on startup
+initializePool()
+
+// Test connection on startup
+testConnection().catch((err) => {
+    console.error('Initial database connection test failed:', err)
+})
+
+async function handleCallFunction(func = async () => {}, body = {}, req = {}) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            await func(
+                {
+                    body: body,
+                    ...req,
+                },
+                {
+                    send: (response) => {
+                        return resolve(response)
+                    },
+                },
+            )
+        } catch (err) {
+            reject(err)
+        }
+    })
+}
+
+class ExecuteSQLNoRes {
+    async executeSQL(query, params = []) {
+        let connection = null
+        
+        try {
+            // Validate query
+            if (!query || typeof query !== 'string') {
+                throw new Error('Invalid query provided')
+            }
+
+            // Get connection from pool
+            connection = await getConnection()
+
+            // Execute query with prepared statements for security
+            const [rows, fields] = await connection.execute(query, params)
+
+            // Return appropriate response based on query type
+            if (query.trim().toLowerCase().startsWith('select')) {
+                return rows
+            } else {
+                return {
+                    status: 'success',
+                    message: `${rows.affectedRows || 0} row(s) affected`,
+                    affectedRows: rows.affectedRows || 0,
+                    insertId: rows.insertId || null,
+                    changedRows: rows.changedRows || 0
+                }
+            }
+
+        } catch (err) {
+            let message = this.checkMessage(err.message)
+            console.error('SQL execution error:', message)
+            throw new Error(message)
+        } finally {
+            // Always release connection back to pool
+            if (connection) {
+                connection.release()
+            }
+        }
+    }
+    }
+    async executeTransaction(queries, params = []) {
+        let connection = null
+        
+        try {
+            // Validate queries
+            if (!Array.isArray(queries) || queries.length === 0) {
+                throw new Error('Invalid queries provided for transaction')
+            }
+
+            // Get connection from pool
+            connection = await getConnection()
+
+            // Start transaction
+            await connection.beginTransaction()
+
+            // Execute all queries in transaction
+            const results = []
+            for (let i = 0; i < queries.length; i++) {
+                const query = queries[i]
+                const queryParams = Array.isArray(params[i]) ? params[i] : []
+                
+                const [rows] = await connection.execute(query, queryParams)
+                results.push(rows)
+            }
+
+            // Commit transaction
+            await connection.commit()
+
+            return {
+                status: 'success',
+                message: 'Transaction completed successfully',
+                results: results
+            }
+
+        } catch (error) {
+            // Rollback transaction on error
+            if (connection) {
+                try {
+                    await connection.rollback()
+                    console.log('Transaction rolled back due to error')
+                } catch (rollbackError) {
+                    console.error('Error during rollback:', rollbackError)
+                }
+            }
+
+            let message = this.checkMessage(error.message)
+            console.error('Transaction error:', message)
+            throw new Error(message)
+
+        } finally {
+            // Always release connection back to pool
+            if (connection) {
+                connection.release()
+            }
+        }
+    }
+    async autoID(table_name, column, digit = 1, preFix = '', middle = '') {
+        try {
+            // MySQL syntax - use LIMIT instead of TOP
+            const sql = `SELECT ${column} 
+                        FROM ${table_name} 
+                        WHERE ${column} LIKE ? 
+                        ORDER BY ${column} DESC 
+                        LIMIT 1`
+            
+            const searchPattern = `${preFix}${middle}%`
+            let new_id = '0'.repeat(digit - 1) + '1'
+            
+            let last_id = await this.executeSQL(sql, [searchPattern])
+            
+            if (last_id.length === 0) {
+                new_id = preFix + middle + new_id
+                return new_id
+            }
+            
+            // Extract the numeric part and increment
+            const lastIdValue = last_id[0][column].replace(`${preFix}${middle}`, '')
+            const nextNum = Number(lastIdValue) + 1
+            
+            // Pad with zeros to maintain digit length
+            const paddedNum = nextNum.toString().padStart(digit, '0')
+            new_id = preFix + middle + paddedNum
+            
+            return new_id
+        } catch (error) {
+            console.error('Error generating auto ID:', error)
+            throw error
+        }
+    }
+
+    checkMessage(err_message) {
+        let message = err_message
+        
+        // Handle MySQL duplicate key errors
+        if (err_message.includes('Duplicate entry')) {
+            message = 'ข้อมูลซ้ำ: มีข้อมูลนี้อยู่ในระบบแล้ว'
+        }
+        
+        // Handle MySQL foreign key constraint errors
+        if (err_message.includes('foreign key constraint') || err_message.includes('CONSTRAINT')) {
+            message = 'ไม่สามารถลบได้ เนื่องจากมีการใช้งานแล้ว'
+        }
+        
+        // Handle MySQL connection errors
+        if (err_message.includes('ECONNREFUSED') || err_message.includes('ER_ACCESS_DENIED')) {
+            message = 'ไม่สามารถเชื่อมต่อฐานข้อมูลได้'
+        }
+        
+        // Handle MySQL syntax errors
+        if (err_message.includes('SQL syntax')) {
+            message = 'รูปแบบคำสั่ง SQL ไม่ถูกต้อง'
+        }
+        
+        // Handle MySQL table/column not found errors
+        if (err_message.includes("doesn't exist") || err_message.includes("Unknown column")) {
+            message = 'ไม่พบตารางหรือคอลัมน์ที่ระบุ'
+        }
+        
+        return message
+    }
+
+    async checkUndefinedParams(body = {}, prefix_message = '', except = []) {
+        return new Promise(async (resolve, reject) => {
+            const _check = checkUndefined(body, except)
+            if (_check) {
+                reject(prefix_message + ' ' + _check.message)
+            }
+            resolve()
+        })
+    }
+    async checkInterface(Iinterface = {}, type_search = '', search = '') {
+        return new Promise(async (resolve, reject) => {
+            if (Iinterface[type_search] === undefined && search !== '') {
+                reject(`type_search Could IN  [ ${Object.keys(Iinterface).join(', ')} ]`)
+            }
+            resolve()
+        })
+    }
+}
+
+class ExecuteSQL extends ExecuteSQLNoRes {
+    constructor(res) {
+        super()
+        this.res = res
+    }
+    /// ถ้า error จะ send error เลย ไม่่ต้อง Check ที่ result
+
+    query(table_name) {
+        if (table_name) {
+            return new ExCRUD(this.res, table_name)
+        } else {
+            throw Error(`table_name is Required`)
+        }
+    }
+
+    async executeSQLAndSend(query, cb = async () => {}) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const request = new sql.Request(conn)
+                const result = await request.query(query)
+                await cb()
+                if (result.recordset !== undefined) {
+                    if (result.recordset.length === 1) {
+                        resolve(this.res.send(view(result.recordset[0])))
+                    }
+                    resolve(this.res.send(view(result.recordset)))
+                } else {
+                    resolve(this.res.send(view(true)))
+                    // resolve(this.res.send({ success: true, status: 'success', message: result.rowsAffected + ' row affected' }))
+                }
+            } catch (err) {
+                let message = this.checkMessage(err.message)
+                reject(message)
+            }
+        })
+    }
+
+    async executeTransactionAndSend(query = []) {
+        return new Promise(async (resolve, reject) => {
+            let idx = 0
+            const transaction = new sql.Transaction(conn)
+            transaction.begin(async (err) => {
+                try {
+                    const request = new sql.Request(transaction)
+                    for (let i = 0; i < query.length; i++) {
+                        idx = i
+                        // console.log('query: ', query[i])
+                        await request.query(query[i])
+                    }
+                    transaction.commit((err) => {
+                        if (err) {
+                            console.log(query[inx])
+                            reject(err.message)
+                        } else {
+                            resolve(this.res.send(view(true)))
+                        }
+                    })
+                } catch (error) {
+                    transaction.rollback((err) => {
+                        if (err) {
+                            reject(error.message)
+                        } else {
+                            let message = this.checkMessage(error.message)
+                            reject(message)
+                        }
+                    })
+                }
+            })
+        })
+    }
+    async checkDuplicate(obj = {}, table_name = '') {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+            const result = await this.executeSQL(sql)
+            if (result.length > 0) {
+                resolve(this.res.send(view(true)))
+            } else {
+                resolve(this.res.send(view(false)))
+            }
+        })
+    }
+}
+class ExCRUD extends ExecuteSQL {
+    constructor(res, table_name) {
+        super(res)
+        this.table_name = table_name
+    }
+
+    async selectGetAll({ column = [], order_by = '', send = true }) {
+        let sql = `SELECT ${column.join(', ')} FROM ${this.table_name} WHERE is_active = 1  ${
+            order_by ? `ORDER BY ${order_by}` : ''
+        }`
+        if (send) {
+            await this.executeSQLAndSend(sql)
+        } else {
+            return await this.executeSQL(sql)
+        }
+    }
+
+    async getByLimit(
+        {
+            c_select = [],
+            search = {
+                s_column: '',
+                s_value: '',
+            },
+            order = '',
+            limit = 0,
+            offset = 0,
+            where = {},
+            join = '',
+            convert = {},
+        },
+        send = true,
+    ) {
+        let sql_where = search.s_value
+        if (sql_where !== '') {
+            sql_where = ` WHERE ${search.s_column} LIKE '${search.s_value}%' `
+        }
+        if (typeof where === 'object') {
+            const where_arr = Object.keys(where)
+            where_arr.forEach((col, idx) => {
+                if (sql_where === '') {
+                    sql_where += ' WHERE ' + `${col} = ${this.convertToString(where[col])}`
+                } else {
+                    sql_where += ` AND ${col} = ${this.convertToString(where[col])}`
+                }
+            })
+        } else if (typeof where === 'string') {
+            if (where) {
+                if (sql_where === '') {
+                    sql_where = ' WHERE ' + where
+                } else {
+                    sql_where += ' AND ' + where
+                }
+            }
+        }
+
+        const total_row_sql = `SELECT COUNT(*) as total_record FROM ${this.table_name}
+                            ${join}
+                            ${sql_where}
+                          `
+        // console.log("sql: ", total_row_sql);
+        let total_record = await this.executeSQL(total_row_sql)
+        total_record = total_record[0].total_record
+
+        let query_offset = ''
+        if (limit > 0) {
+            query_offset = `OFFSET ${offset} ROWS
+                            FETCH NEXT ${limit} ROWS ONLY`
+        }
+
+        const sql = `SELECT ${c_select.join(', ')} 
+                    FROM ${this.table_name}
+                    ${join}
+                    ${sql_where}
+                    ORDER BY ${order} 
+                    ${query_offset}`
+
+        // console.log("sql: ", sql);
+        let result = await this.executeSQL(sql)
+        const col_convert = Object.keys(convert)
+        col_convert.forEach((col) => {
+            result = result.map((item) => {
+                return {
+                    ...item,
+                    [col]: convert[col] ? convert[col][item[col]] : item[col],
+                }
+            })
+        })
+
+        if (send) {
+            return this.res.send(
+                view({
+                    result: result,
+                    total: total_record,
+                }),
+            )
+        } else {
+            return result
+        }
+    }
+    async getByLimitTotal({
+        search = {
+            s_column: '',
+            s_value: '',
+        },
+        where = {},
+        join = '',
+    }) {
+        let sql_where = search.s_value
+        if (sql_where !== '') {
+            sql_where = ` WHERE ${search.s_column} LIKE '${search.s_value}%' `
+        }
+        if (typeof where === 'object') {
+            const where_arr = Object.keys(where)
+            where_arr.forEach((col, idx) => {
+                if (sql_where === '') {
+                    sql_where += ' WHERE ' + `${col} = ${this.convertToString(where[col])}`
+                } else {
+                    sql_where += ` AND ${col} = ${this.convertToString(where[col])}`
+                }
+            })
+        } else if (typeof where === 'string') {
+            if (where) {
+                if (sql_where === '') {
+                    sql_where = ' WHERE ' + where
+                } else {
+                    sql_where += ' AND ' + where
+                }
+            }
+        }
+
+        const total_row_sql = `SELECT COUNT(*) as total_record FROM ${this.table_name}
+                            ${join}
+                            ${sql_where}
+                          `
+        // console.log("sql: ", total_row_sql);
+        let total_record = await this.executeSQL(total_row_sql)
+        return total_record[0].total_record
+    }
+    async checkDuplicate(obj = {}, send = true) {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${this.table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+
+            const result = await this.executeSQL(sql)
+
+            if (send) {
+                resolve(this.res.send(view(result.length > 0)))
+            } else {
+                resolve(result.length > 0)
+            }
+        })
+    }
+
+    async autoID(column, digit = 1, preFix = '', middle = '') {
+        const sql = `SELECT TOP 1 ${column} 
+                    FROM ${this.table_name} 
+                    WHERE ${column} 
+                    LIKE '${preFix + middle}%'
+                    ORDER BY ${column} DESC
+                    `
+        let new_id = '0'.repeat(digit - 1) + '1'
+        // console.log('sql: ', sql)
+        let last_id = await this.executeSQL(sql)
+        if (last_id.length === 0) {
+            new_id = `${preFix}${middle}${new_id}`
+            return new_id
+        }
+
+        last_id = Number(last_id[0][column].replace(`${preFix}${middle}`, '')) + 1
+        new_id =
+            preFix + middle + '0'.repeat(digit - last_id.toString().length) + last_id.toString()
+        return new_id
+    }
+
+    convertToString = (s) => {
+        if (
+            s === 'null' ||
+            s === 'NULL' ||
+            s === '' ||
+            s === ' ' ||
+            s === null ||
+            s === undefined
+        ) {
+            return 'null'
+        }
+
+        if (typeof s === 'string') {
+            if (!s.endsWith('()')) {
+                return `'${s}'`
+            }
+            if (s.toUpperCase() === 'GETDATE()') {
+                return `'${moment().format('YYYY-MM-DD HH:mm:ss')}'`
+            }
+        } else if (typeof s === 'boolean') {
+            return s ? 1 : 0
+        }
+        return s
+    }
+
+    async create(columns = {} || [], execute = true) {
+        let _columns = []
+        let _val = []
+        const objToString = (obj) => {
+            const temp = []
+            Object.keys(obj).map((m) => {
+                temp.push(this.convertToString(obj[m]))
+            })
+            return `( ${temp.join(', ')} )`
+        }
+
+        if (Array.isArray(columns)) {
+            _columns = Object.keys(columns[0])
+            columns.forEach((f) => {
+                _val.push(objToString(f))
+            })
+        } else if (typeof columns === 'object') {
+            _columns = Object.keys(columns)
+            _val.push(objToString(columns))
+        }
+
+        const sql = []
+        const limit = 1
+        for (let i = 0; i < _val.length; i += limit) {
+            const slice_val = _val.slice(i, i + limit)
+            sql.push(`INSERT INTO ${this.table_name} 
+            (${_columns.join(', ')} )
+            VALUES 
+            ${slice_val.join(', ')}`)
+        }
+
+        if (execute) {
+            await this.executeTransactionAndSend(sql)
+        } else {
+            return sql
+        }
+    }
+
+    async update(columns = {}, target = {}, execute = true) {
+        const _columns = Object.keys(columns)
+        const _val = _columns.map((m) => {
+            return ` ${m} = ${this.convertToString(columns[m])}`
+        })
+
+        let where = ''
+        if (typeof target === 'object') {
+            let tmp = Object.keys(target).map((item, idx) => {
+                return `${item} = ${this.convertToString(target[item])}`
+            })
+            where = tmp.join(' AND ')
+        } else if (typeof target === 'string') {
+            where = target
+        }
+
+        const sql = `UPDATE ${this.table_name} SET 
+                    ${_val.join(', ')}
+                    WHERE ${where}
+                    `
+        if (execute) {
+            await this.executeTransactionAndSend([sql])
+        } else {
+            return sql
+        }
+    }
+    async deleteR(target = {}, execute = true) {
+        const _columns = Object.keys(target)
+        let sql_where = ''
+        _columns.forEach((col, idx) => {
+            if (idx > 0) {
+                sql_where += ' AND ' + `${col} = ${this.convertToString(target[col])}`
+            } else {
+                sql_where += `WHERE ${col} = ${this.convertToString(target[col])}`
+            }
+        })
+        const sql = `DELETE ${this.table_name} ${sql_where}`
+        if (execute) {
+            await this.executeTransactionAndSend([sql])
+        }
+        return sql
+    }
+}
+class ExCRUD2 {
+    constructor(table_name, ext) {
+        this.table_name = table_name
+        this.ext = ext
+    }
+
+    async selectGetAll({ column = [], order_by = '', send = true }) {
+        let sql = `SELECT ${column.join(', ')} FROM ${this.table_name} WHERE is_active = 1  ${
+            order_by ? `ORDER BY ${order_by}` : ''
+        }`
+        if (send) {
+            await this.ext.executeSQLAndSend(sql)
+        } else {
+            return await this.ext.executeSQL(sql)
+        }
+    }
+
+    async getByLimit(
+        {
+            c_select = [],
+            search = {
+                s_column: '',
+                s_value: '',
+                not: false,
+            },
+            order = '',
+            limit = 0,
+            offset = 0,
+            where = {},
+            join = '',
+            convert = {},
+            tabs = {
+                columns: '',
+                where: '',
+            },
+        },
+        send = true,
+        log = false,
+    ) {
+        let sql_where = search.s_value
+        if (sql_where !== '') {
+            if (Array.isArray(search.s_value)) {
+                sql_where = `WHERE ${search.s_column} ${
+                    search.not ? 'NOT ' : ''
+                } IN ( ${search.s_value.map((s) => `'${s}'`).join(' ,')} )`
+            } else {
+                sql_where = ` WHERE ${search.s_column} ${search.not ? 'NOT ' : ''} LIKE '${
+                    search.s_value
+                }%' `
+            }
+        }
+
+        if (typeof where === 'object') {
+            const where_arr = Object.keys(where)
+            where_arr.forEach((col, idx) => {
+                if (sql_where === '') {
+                    sql_where += ' WHERE ' + `${col} = ${this.convertToString(where[col])}`
+                } else {
+                    sql_where += ` AND ${col} = ${this.convertToString(where[col])}`
+                }
+            })
+        } else if (typeof where === 'string') {
+            if (where) {
+                if (sql_where === '') {
+                    sql_where = ' WHERE ' + where
+                } else {
+                    sql_where += ' AND ' + where
+                }
+            }
+        }
+
+        const total_row_sql = `SELECT COUNT(*) as total_record FROM ${this.table_name}
+                            ${join}
+                            ${sql_where}
+                          `
+        let total_record = await this.ext.executeSQL(total_row_sql)
+        total_record = total_record[0].total_record
+
+        const _tabs = {}
+        if (tabs.columns !== '' && typeof tabs.columns === 'string') {
+            const total_tab = `SELECT ${tabs.columns} , COUNT(${tabs.columns}) total FROM ${
+                this.table_name
+            }
+                                ${tabs.where ? `WHERE ${tabs.where}` : ''}
+                                GROUP BY ${tabs.columns}                                
+                                `
+            let total_tabs = await this.ext.executeSQL(total_tab)
+            let count = 0
+            if (total_tabs.status !== 'failed') {
+                total_tabs.forEach((t) => {
+                    count += t.total
+                    _tabs[`${t[tabs.columns]}`] = t.total
+                })
+                _tabs.All = count
+            }
+        } else if (tabs.columns && Array.isArray(tabs.columns)) {
+            const total_tab = `SELECT ${tabs.columns.join(' , ')} , COUNT(*) total FROM ${
+                this.table_name
+            }
+                ${tabs.where ? `WHERE ${tabs.where}` : ''}
+                GROUP BY ${tabs.columns.join(' , ')}
+            `
+            let total_tabs = await this.ext.executeSQL(total_tab)
+            let count = 0
+            if (total_tabs.status !== 'failed') {
+                total_tabs.forEach((t) => {
+                    count += t.total
+                    for (let i = 0; i < tabs.columns.length; i++) {
+                        const _t = tabs.columns.slice(0, i + 1)
+                        const _string = _t.map((m) => t[m]).join('_')
+                        _tabs[`${_string}`] = (_tabs[`${_string}`] ?? 0) + t.total
+                        const _t2 = tabs.columns.slice(1, i + 1)
+                        if (_t2.length > 0) {
+                            const _s2 = _t2.map((m) => t[m]).join('_')
+                            _tabs[`All_${_s2}`] = (_tabs[`All_${_s2}`] ?? 0) + t.total
+                        }
+                    }
+                })
+                _tabs.All = count
+            }
+        }
+
+        let query_offset = ''
+        if (limit > 0) {
+            query_offset = `OFFSET ${offset} ROWS
+                            FETCH NEXT ${limit} ROWS ONLY`
+        }
+
+        const sql = `SELECT ${c_select.join(', ')} 
+                    FROM ${this.table_name}
+                    ${join}
+                    ${sql_where}
+                    ORDER BY ${order} 
+                    ${query_offset}`
+        if (log) {
+            console.log(sql)
+        }
+        let result = await this.ext.executeSQL(sql)
+        const col_convert = Object.keys(convert)
+        col_convert.forEach((col) => {
+            result = result.map((item) => {
+                return {
+                    ...item,
+                    [col]: convert[col] ? convert[col][item[col]] : item[col],
+                }
+            })
+        })
+
+        if (send) {
+            return this.ext.res.send(
+                view({
+                    result: result,
+                    total: total_record,
+                    tabs: _tabs,
+                }),
+            )
+        } else {
+            return result
+        }
+    }
+    async checkDuplicate(obj = {}, send = true) {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${this.table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+            const result = await this.ext.executeSQL(sql)
+            if (result.length > 0) {
+                if (send) {
+                    resolve(this.ext.res.send(view(true)))
+                } else {
+                    resolve(true)
+                }
+            } else {
+                if (send) {
+                    resolve(this.ext.res.send(view(false)))
+                } else {
+                    resolve(false)
+                }
+            }
+        })
+    }
+
+    async autoID(column, digit = 1, preFix = '', middle = '') {
+        const sql = `SELECT TOP 1 ${column} 
+                    FROM ${this.table_name} 
+                    WHERE ${column} 
+                    LIKE '${preFix + middle}%'
+                    ORDER BY ${column} DESC
+                    `
+        let new_id = '0'.repeat(digit - 1) + '1'
+        let last_id = await this.ext.executeSQL(sql)
+        if (last_id.length === 0) {
+            new_id = `${preFix}${middle}${new_id}`
+            return new_id
+        }
+        last_id = Number(last_id[0][column].replace(`${preFix}${middle}`, '')) + 1
+        new_id =
+            preFix + middle + '0'.repeat(digit - last_id.toString().length) + last_id.toString()
+        return new_id
+    }
+
+    convertToString(s) {
+        if (
+            s === 'null' ||
+            s === 'NULL' ||
+            s === '' ||
+            s === ' ' ||
+            s === null ||
+            s === undefined
+        ) {
+            return 'null'
+        }
+
+        if (typeof s === 'string') {
+            if (!s.endsWith('()')) {
+                return `'${s}'`
+            }
+        } else if (typeof s === 'boolean') {
+            return s ? 1 : 0
+        }
+        return s
+    }
+
+    async create(columns = {} || [], execute = true) {
+        let _columns = []
+        let _val = []
+        const objToString = (obj) => {
+            const temp = []
+            Object.keys(obj).map((m) => {
+                temp.push(this.convertToString(obj[m]))
+            })
+            return `( ${temp.join(', ')} )`
+        }
+
+        if (Array.isArray(columns)) {
+            _columns = Object.keys(columns[0])
+            columns.forEach((f) => {
+                _val.push(objToString(f))
+            })
+        } else if (typeof columns === 'object') {
+            _columns = Object.keys(columns)
+            _val.push(objToString(columns))
+        }
+
+        const sql = []
+        const limit = 1
+        for (let i = 0; i < _val.length; i += limit) {
+            const slice_val = _val.slice(i, i + limit)
+            sql.push(`INSERT INTO ${this.table_name} 
+            (${_columns.join(', ')} )
+            VALUES 
+            ${slice_val.join(', ')}`)
+        }
+        if (execute) {
+            await this.ext.executeTransactionAndSend(sql)
+        } else {
+            return sql
+        }
+    }
+
+    async update(columns = {}, target = {}, execute = true) {
+        const _columns = Object.keys(columns)
+        const _val = _columns.map((m) => {
+            return ` ${m} = ${this.convertToString(columns[m])}`
+        })
+
+        let where = ''
+        if (typeof target === 'object') {
+            let tmp = Object.keys(target).map((item, idx) => {
+                return `${item} = ${this.convertToString(target[item])}`
+            })
+            where = tmp.join(' AND ')
+        } else if (typeof target === 'string') {
+            where = target
+        }
+
+        const sql = `UPDATE ${this.table_name} SET 
+                    ${_val.join(', ')}
+                    WHERE ${where}
+                    `
+        if (execute) {
+            await this.ext.executeTransactionAndSend([sql])
+        } else {
+            return sql
+        }
+    }
+
+    async deleteR(target = {}, execute = true) {
+        const _columns = Object.keys(target)
+        let sql_where = ''
+        _columns.forEach((col, idx) => {
+            if (idx > 0) {
+                sql_where += ' AND ' + `${col} = ${this.convertToString(target[col])}`
+            } else {
+                sql_where += `WHERE ${col} = ${this.convertToString(target[col])}`
+            }
+        })
+        const sql = `DELETE ${this.table_name} ${sql_where}`
+        if (execute) {
+            await this.ext.executeTransactionAndSend([sql])
+        }
+        return sql
+    }
+}
+class ExCRUD_V2 {
+    constructor(res) {
+        this.res = res
+    }
+    /// V2 ถ้า error จะ send error เลย ไม่่ต้อง Check ที่ result
+
+    query(table_name) {
+        if (table_name) {
+            // console.log(this.con)
+            return new ExCRUD2(table_name, this)
+        } else {
+            throw Error(`table_name is Required`)
+        }
+    }
+
+    async executeSQL(query) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const request = new sql.Request(conn)
+                const result = await request.query(query)
+
+                if (result.recordset !== undefined) {
+                    resolve(result.recordset)
+                } else {
+                    resolve({
+                        status: 'success',
+                        message: result.rowsAffected + ' row affected',
+                    })
+                }
+            } catch (err) {
+                let message = this.checkMessage(err.message)
+                reject(message)
+            }
+        })
+    }
+
+    async executeSQLAndSend(query) {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const request = new sql.Request(conn)
+                const result = await request.query(query)
+
+                if (result.recordset !== undefined) {
+                    resolve(this.res.send(view(result.recordset)))
+                } else {
+                    resolve(this.res.send(view(true)))
+                    // resolve(this.res.send({ success: true, status: 'success', message: result.rowsAffected + ' row affected' }))
+                }
+            } catch (err) {
+                let message = this.checkMessage(err.message)
+                reject(message)
+            }
+        })
+    }
+    async executeTransaction(query) {
+        return new Promise(async (resolve, reject) => {
+            const transaction = new sql.Transaction(conn)
+            let idx = 0
+            transaction.begin(async (err) => {
+                try {
+                    const request = new sql.Request(transaction)
+                    for (let i = 0; i < query.length; i++) {
+                        idx = i
+                        await request.query(query[i])
+                    }
+                    transaction.commit((err) => {
+                        if (err) {
+                            reject(err.message)
+                        } else {
+                            resolve({
+                                status: 'success',
+                                message: 'transaction commit success',
+                            })
+                        }
+                    })
+                } catch (error) {
+                    transaction.rollback((err) => {
+                        if (err) {
+                            reject(error.message)
+                        } else {
+                            let message = this.checkMessage(error.message)
+                            reject(message)
+                        }
+                    })
+                }
+            })
+        })
+    }
+    async executeTransactionAndSend(query = []) {
+        return new Promise(async (resolve, reject) => {
+            let idx = 0
+            const transaction = new sql.Transaction(conn)
+            transaction.begin(async (err) => {
+                try {
+                    const request = new sql.Request(transaction)
+                    for (let i = 0; i < query.length; i++) {
+                        idx = i
+                        await request.query(query[i])
+                    }
+                    transaction.commit((err) => {
+                        if (err) {
+                            // console.log(query[inx])
+                            reject(err.message)
+                        } else {
+                            resolve(this.res.send(view(true)))
+                        }
+                    })
+                } catch (error) {
+                    transaction.rollback((err) => {
+                        if (err) {
+                            reject(error.message)
+                        } else {
+                            let message = this.checkMessage(error.message)
+                            reject(message)
+                        }
+                    })
+                }
+            })
+        })
+    }
+    checkMessage(err_message) {
+        let message = err_message
+        if (err_message.includes('The duplicate key')) {
+            const m = err_message.split('.')
+            message = m[m.length - 2]
+        }
+        // if (err_message.includes('Truncated value')) {
+        //     const m = err_message.split(',')
+        //     message = m[m.length - 1]
+        // }
+        if (err_message.includes('REFERENCE constraint')) {
+            message = 'ไม่สามารถลบได้ เนื่องจากมีการใช้งานแล้ว'
+        }
+        return message
+    }
+
+    async checkUndefinedParams(body = {}, prefix_message = '', except = []) {
+        return new Promise(async (resolve, reject) => {
+            const _check = checkUndefined(body, except)
+            if (_check) {
+                reject(prefix_message + ' ' + _check.message)
+            }
+            resolve()
+        })
+    }
+    async checkInterface(Iinterface = {}, type_search = '', search = '') {
+        return new Promise(async (resolve, reject) => {
+            if (Iinterface[type_search] === undefined && search !== '') {
+                reject(`type_search Could IN  [ ${Object.keys(Iinterface).join(', ')} ]`)
+            }
+            resolve()
+        })
+    }
+    async checkDuplicate(obj = {}, table_name = '') {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+            const result = await this.executeSQL(sql)
+            if (result.length > 0) {
+                resolve(this.res.send(view(true)))
+            } else {
+                resolve(this.res.send(view(false)))
+            }
+        })
+    }
+    async autoID(table_name, column, digit = 1, preFix = '', middle = '') {
+        const sql = `SELECT TOP 1 ${column} 
+                    FROM ${table_name} 
+                    WHERE ${column} 
+                    LIKE '${preFix + middle}%'
+                    ORDER BY ${column} DESC
+                    `
+        let new_id = '0'.repeat(digit - 1) + '1'
+        let last_id = await this.executeSQL(sql)
+        if (last_id.length === 0) {
+            new_id = preFix + middle + new_id
+            return new_id
+        }
+        last_id = Number(last_id[0][column]) + 1
+        new_id = preFix + middle + '0'.repeat(4 - last_id.toString().length) + last_id
+        return new_id
+    }
+}
+
+module.exports.ExecuteSQL = ExecuteSQL
+module.exports.ExCRUD = ExCRUD
+module.exports.ExCRUD_V2 = ExCRUD_V2
+module.exports.ExecuteSQLNoRes = ExecuteSQLNoRes
+module.exports.handleCallFunction = handleCallFunction
