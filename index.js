@@ -25,5 +25,9 @@ app.use(
     }),
 )
 app.use(url + '/login', require('./routes/login'))
-app.use(url + '/users', authenticated, isNotChrSpecial, require('./routes/users'))
-app.use(url + '/menus', authenticated, isNotChrSpecial, require('./routes/menu'))
+app.use(url + '/users', isNotChrSpecial, require('./routes/users')) //authenticated
+app.use(url + '/menus', isNotChrSpecial, require('./routes/menu')) //authenticated
+
+app.use(url + '/departments', isNotChrSpecial, require('./routes/master/department')) //authenticated
+app.use(url + '/divisions', isNotChrSpecial, require('./routes/master/division')) //authenticated
+app.use(url + '/positions', isNotChrSpecial, require('./routes/master/position')) //authenticated

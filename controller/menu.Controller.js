@@ -1,9 +1,8 @@
 const { ExecuteSQL, ExCRUD } = require('../db')
 const { viewFailed, view, paramRequired, viewParamRequest } = require('../utils/views')
 const { checkUndefined } = require('../utils/checkUndefined')
-const { permit_list } = require('../utils/employee')
+
 const moment = require('moment')
-const { verify } = require('crypto')
 
 async function getAllMenus(req, res) {
     const db = new ExecuteSQL(res)
@@ -86,18 +85,18 @@ async function updateMenu(req, res) {
         SQLList.push(`DELETE FROM user_permit WHERE menu_id='${menu_id}'`)
 
         let permissions = []
-        users.forEach((value) => {
-            let have_permit = false
-            for (const permit of permit_list) {
-                have_permit = have_permit || value[permit]
-            }
-            if (have_permit)
-                for (const permit of permit_list) {
-                    permissions.push(
-                        `( '${value.emp_id}','${menu_id}','${permit}',${value[permit] ? 1 : 0})`,
-                    )
-                }
-        })
+        // users.forEach((value) => {
+        //     let have_permit = false
+        //     for (const permit of permit_list) {
+        //         have_permit = have_permit || value[permit]
+        //     }
+        //     if (have_permit)
+        //         for (const permit of permit_list) {
+        //             permissions.push(
+        //                 `( '${value.emp_id}','${menu_id}','${permit}',${value[permit] ? 1 : 0})`,
+        //             )
+        //         }
+        // })
 
         const chunkSize = 500
         for (let i = 0; i < permissions.length; i += chunkSize) {
@@ -116,7 +115,7 @@ async function updateMenu(req, res) {
 
 async function getMenus(req, res) {
     try {
-        const db = new ExCRUD(res, '[OEE].[dbo].[menu] m')
+        const db = new ExCRUD(res, 'menu m')
 
         const { offset, limit, search, type_search } = req.body
 
@@ -132,9 +131,9 @@ async function getMenus(req, res) {
                 c_select: [
                     'm.menu_id',
                     'm.menu_name',
-                    'cr.name_th_id created_by',
+                    'm.created_by',
                     'm.created_date',
-                    'ed.name_th_id edit_by',
+                    'm.edit_by',
                     'm.edit_date',
                 ],
                 search: {
@@ -143,10 +142,7 @@ async function getMenus(req, res) {
                 },
                 order: 'm.menu_id',
                 limit,
-                offset,
-                join: `
-            LEFT JOIN [OEE].[dbo].[employees_view] cr ON cr.emp_id = m.created_by
-            LEFT JOIN [OEE].[dbo].[employees_view] ed ON ed.emp_id = m.edit_by`,
+                offset
             },
             (send = true),
         )
@@ -160,7 +156,7 @@ async function getMenus(req, res) {
 
 async function getMenuDetail(req, res) {
     try {
-        const db = new ExCRUD(res, 'permission_view p')
+        const db = new ExCRUD(res, '')
 
         const { menu_id } = req.body
 
@@ -173,24 +169,25 @@ async function getMenuDetail(req, res) {
             return res.send(viewFailed(`Not found menu:${menu_id}`))
         }
 
-        strSql = `SELECT up.emp_id,u.name_th , u.surname_th, u.name_eng, u.surname_eng ,
+        strSql = `SELECT up.user_id,u.emp_id,u.prefix + ' ' + u.fullname,
                 action_open,action_view,action_add,action_edit,
                 action_delete,action_print,action_confirm,
                 action_cancel,action_calculate,action_other
-                FROM [Employees].[dbo].[employees] u
-                INNER JOIN permission_view up ON u.emp_id = up.emp_id 
-                WHERE menu_id='${menu_id}'
-                ORDER BY u.emp_id `
+                FROM users u
+                LEFT JOIN user_permit up ON u.user_id = up.user_id
+                WHERE up.menu_id='${menu_id}'
+                ORDER BY u.user_id`
 
         const users = await db.executeSQL(strSql)
-        const registered_users = await db.executeSQL(`
-            SELECT r.emp_id,e.name_th , e.surname_th ,e.name_eng,e.surname_eng,r.last_login FROM [OEE].[dbo].[registered] r 
-                LEFT JOIN [Employees].[dbo].[employees] e ON  e.emp_id = r.emp_id `)
+        console.log("users: ", users);
+        // const registered_users = await db.executeSQL(`
+        //     SELECT r.emp_id,e.name_th , e.surname_th ,e.name_eng,e.surname_eng,r.last_login FROM [OEE].[dbo].[registered] r 
+        //         LEFT JOIN [Employees].[dbo].[employees] e ON  e.emp_id = r.emp_id `)
         return res.send(
             view({
                 ...menu[0],
-                users: registered_users.map((value) => {
-                    const user_permit = users.find((e) => e.emp_id === value.emp_id)
+                users: users.map((value) => {
+                    const user_permit = users.find((e) => e.user_id === value.user_id)
                     return user_permit
                         ? {
                               emp_id: user_permit.emp_id,
@@ -236,6 +233,7 @@ async function getMenuDetail(req, res) {
         }
     }
 }
+
 async function getNavigation(req, res) {
     try {
         const db = new ExecuteSQL(res)
@@ -253,16 +251,16 @@ async function getNavigation(req, res) {
         }
 
         const { user_id } = req.body
-
         await db.checkUndefinedParams({ user_id })
-
         const permission = await db.executeSQL(` 
-        SELECT up.menu_id,m.menu_name,up.permit,up.enable
-        FROM user_permit up
-        LEFT JOIN menu m ON m.menu_id = up.menu_id
-        WHERE up.user_id ='${user_id}'`)
+                SELECT up.*,m.menu_name
+                FROM user_permit up
+                LEFT JOIN menu m ON m.menu_id = up.menu_id
+                WHERE up.user_id ='${user_id}'
+                `)
 
         let menu = {}
+        // console.log('permission', permission)
         permission.forEach((element) => {
             if (!(element.menu_id in menu)) {
                 menu[element.menu_id] = { menu_name: element.menu_name }
@@ -271,17 +269,17 @@ async function getNavigation(req, res) {
         })
 
         let nav = [
+            // {
+            //     name: '',
+            //     icon: 'cilBarChart',
+            //     _tag: 'CSidebarNavItem',
+            //     ...actionOpen('M002', '/dashboard', menu),
+            // },
             {
-                name: 'Dashboard',
-                icon: 'cilBarChart',
+                name: 'ใบสั่งซ่อม',
+                icon: 'cilDocument',
                 _tag: 'CSidebarNavItem',
-                ...actionOpen('M002', '/dashboard', menu),
-            },
-            {
-                name: 'EVA',
-                icon: 'cilBarChart',
-                _tag: 'CSidebarNavItem',
-                ...actionOpen('M003', '/eva/', menu),
+                ...actionOpen('M002', '/repair-order', menu),
             },
             // {
             //     name: 'มาสเตอร์',

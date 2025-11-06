@@ -9,7 +9,6 @@ const {
     getAllMenus,
     getNavigation,
 } = require('../controller/menu.Controller')
-const { getReportNavigation } = require('../controller/report/report.Controller')
 
 router.post('/', getMenus)
 router.post('/get', getMenuDetail)

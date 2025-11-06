@@ -56,7 +56,7 @@ const testConnection = async () => {
         const connection = await getConnection()
         await connection.ping()
         connection.release()
-        console.log('Database connection test successful')
+        // console.log('Database connection test successful')
         return true
     } catch (error) {
         console.error('Database connection test failed:', error)
@@ -319,90 +319,282 @@ class ExCRUD extends ExecuteSQL {
         this.table_name = table_name
     }
 
-    async select(query = '', print = true) {
-        const sql = `SELECT * FROM ${this.table_name} ${query}`
-        if (print) {
+    async selectGetAll({ column = [], order_by = '', send = true }) {
+        let sql = `SELECT ${column.join(', ')} FROM ${this.table_name} WHERE is_active = 1  ${
+            order_by ? `ORDER BY ${order_by}` : ''
+        }`
+        if (send) {
             await this.executeSQLAndSend(sql)
         } else {
             return await this.executeSQL(sql)
         }
     }
 
-    async insert(body, column_except = [], print = true) {
-        await this.checkUndefinedParams(body, 'Insert Error', column_except)
-        
-        const filteredBody = { ...body }
-        column_except.forEach(col => delete filteredBody[col])
-        
-        const columns = Object.keys(filteredBody).join(', ')
-        const placeholders = Object.keys(filteredBody).map(() => '?').join(', ')
-        const values = Object.values(filteredBody)
-        
-        const sql = `INSERT INTO ${this.table_name} (${columns}) VALUES (${placeholders})`
-        
-        if (print) {
-            await this.executeSQLAndSend(sql, values)
-        } else {
-            return await this.executeSQL(sql, values)
+    async getByLimit(
+        {
+            c_select = [],
+            search = {
+                s_column: '',
+                s_value: '',
+            },
+            order = '',
+            limit = 0,
+            offset = 0,
+            where = {},
+            join = '',
+            convert = {},
+        },
+        send = true,
+    ) {
+        let sql_where = search.s_value
+        if (sql_where !== '') {
+            // Use full wildcard search for better partial matching
+            sql_where = ` WHERE ${search.s_column} LIKE '%${search.s_value}%' `
         }
-    }
-
-    async update(body, where = '', column_except = [], print = true) {
-        await this.checkUndefinedParams(body, 'Update Error', column_except)
-        
-        const filteredBody = { ...body }
-        column_except.forEach(col => delete filteredBody[col])
-        
-        const setClause = Object.keys(filteredBody).map(key => `${key} = ?`).join(', ')
-        const values = Object.values(filteredBody)
-        
-        const sql = `UPDATE ${this.table_name} SET ${setClause} ${where}`
-        
-        if (print) {
-            await this.executeSQLAndSend(sql, values)
-        } else {
-            return await this.executeSQL(sql, values)
-        }
-    }
-
-    async delete(where = '', print = true) {
-        const sql = `DELETE FROM ${this.table_name} ${where}`
-        
-        if (print) {
-            await this.executeSQLAndSend(sql)
-        } else {
-            return await this.executeSQL(sql)
-        }
-    }
-
-    async page(where = '', order_by = '', order_type = 'ASC', limit = 10, offset = 0, column = '*') {
-        const total_row_sql = `SELECT COUNT(*) as total FROM ${this.table_name} ${where}`
-        let total_record = await this.executeSQL(total_row_sql)
-        const total = total_record[0].total
-
-        const total_page = Math.ceil(total / limit)
-        const current_page = Math.floor(offset / limit) + 1
-        
-        const sql = `SELECT ${column} FROM ${this.table_name} ${where} ${order_by !== '' ? `ORDER BY ${order_by} ${order_type}` : ''} LIMIT ${limit} OFFSET ${offset}`
-        let result = await this.executeSQL(sql)
-
-        const response = {
-            data: result,
-            pagination: {
-                current_page,
-                total_page,
-                total_record: total,
-                limit,
-                offset
+        if (typeof where === 'object') {
+            const where_arr = Object.keys(where)
+            where_arr.forEach((col, idx) => {
+                if (sql_where === '') {
+                    sql_where += ' WHERE ' + `${col} = ${this.convertToString(where[col])}`
+                } else {
+                    sql_where += ` AND ${col} = ${this.convertToString(where[col])}`
+                }
+            })
+        } else if (typeof where === 'string') {
+            if (where) {
+                if (sql_where === '') {
+                    sql_where = ' WHERE ' + where
+                } else {
+                    sql_where += ' AND ' + where
+                }
             }
         }
 
-        this.res.send(view(response))
-        return response
+        const total_row_sql = `SELECT COUNT(*) as total_record FROM ${this.table_name}
+                            ${join}
+                            ${sql_where}
+                          `
+        // console.log("sql: ", total_row_sql);
+        let total_record = await this.executeSQL(total_row_sql)
+        total_record = total_record[0].total_record
+
+        let query_offset = ''
+        if (limit > 0) {
+            query_offset = `LIMIT ${limit} OFFSET ${offset}`
+        }
+
+        const sql = `SELECT ${c_select.join(', ')} 
+                    FROM ${this.table_name}
+                    ${join}
+                    ${sql_where}
+                    ORDER BY ${order} 
+                    ${query_offset}`
+
+        // console.log("sql: ", sql);
+        let result = await this.executeSQL(sql)
+        const col_convert = Object.keys(convert)
+        col_convert.forEach((col) => {
+            result = result.map((item) => {
+                return {
+                    ...item,
+                    [col]: convert[col] ? convert[col][item[col]] : item[col],
+                }
+            })
+        })
+
+        if (send) {
+            return this.res.send(
+                view({
+                    result: result,
+                    total: total_record,
+                }),
+            )
+        } else {
+            return result
+        }
+    }
+    async getByLimitTotal({
+        search = {
+            s_column: '',
+            s_value: '',
+        },
+        where = {},
+        join = '',
+    }) {
+        let sql_where = search.s_value
+        if (sql_where !== '') {
+            sql_where = ` WHERE ${search.s_column} LIKE '${search.s_value}%' `
+        }
+        if (typeof where === 'object') {
+            const where_arr = Object.keys(where)
+            where_arr.forEach((col, idx) => {
+                if (sql_where === '') {
+                    sql_where += ' WHERE ' + `${col} = ${this.convertToString(where[col])}`
+                } else {
+                    sql_where += ` AND ${col} = ${this.convertToString(where[col])}`
+                }
+            })
+        } else if (typeof where === 'string') {
+            if (where) {
+                if (sql_where === '') {
+                    sql_where = ' WHERE ' + where
+                } else {
+                    sql_where += ' AND ' + where
+                }
+            }
+        }
+
+        const total_row_sql = `SELECT COUNT(*) as total_record FROM ${this.table_name}
+                            ${join}
+                            ${sql_where}
+                          `
+        // console.log("sql: ", total_row_sql);
+        let total_record = await this.executeSQL(total_row_sql)
+        return total_record[0].total_record
+    }
+    async checkDuplicate(obj = {}, send = true) {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${this.table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+
+            const result = await this.executeSQL(sql)
+
+            if (send) {
+                resolve(this.res.send(view(result.length > 0)))
+            } else {
+                resolve(result.length > 0)
+            }
+        })
     }
 
     async autoID(column, digit = 1, preFix = '', middle = '') {
-        return await super.autoID(this.table_name, column, digit, preFix, middle)
+        const sql = `SELECT TOP 1 ${column} 
+                    FROM ${this.table_name} 
+                    WHERE ${column} 
+                    LIKE '${preFix + middle}%'
+                    ORDER BY ${column} DESC
+                    `
+        let new_id = '0'.repeat(digit - 1) + '1'
+        // console.log('sql: ', sql)
+        let last_id = await this.executeSQL(sql)
+        if (last_id.length === 0) {
+            new_id = `${preFix}${middle}${new_id}`
+            return new_id
+        }
+
+        last_id = Number(last_id[0][column].replace(`${preFix}${middle}`, '')) + 1
+        new_id =
+            preFix + middle + '0'.repeat(digit - last_id.toString().length) + last_id.toString()
+        return new_id
+    }
+
+    convertToString = (s) => {
+        if (
+            s === 'null' ||
+            s === 'NULL' ||
+            s === '' ||
+            s === ' ' ||
+            s === null ||
+            s === undefined
+        ) {
+            return 'null'
+        }
+
+        if (typeof s === 'string') {
+            if (!s.endsWith('()')) {
+                return `'${s}'`
+            }
+            if (s.toUpperCase() === 'GETDATE()') {
+                return `'${moment().format('YYYY-MM-DD HH:mm:ss')}'`
+            }
+        } else if (typeof s === 'boolean') {
+            return s ? 1 : 0
+        }
+        return s
+    }
+
+    async create(columns = {} || [], execute = true) {
+        let _columns = []
+        let _val = []
+        const objToString = (obj) => {
+            const temp = []
+            Object.keys(obj).map((m) => {
+                temp.push(this.convertToString(obj[m]))
+            })
+            return `( ${temp.join(', ')} )`
+        }
+
+        if (Array.isArray(columns)) {
+            _columns = Object.keys(columns[0])
+            columns.forEach((f) => {
+                _val.push(objToString(f))
+            })
+        } else if (typeof columns === 'object') {
+            _columns = Object.keys(columns)
+            _val.push(objToString(columns))
+        }
+
+        const sql = []
+        const limit = 1
+        for (let i = 0; i < _val.length; i += limit) {
+            const slice_val = _val.slice(i, i + limit)
+            sql.push(`INSERT INTO ${this.table_name} 
+            (${_columns.join(', ')} )
+            VALUES 
+            ${slice_val.join(', ')}`)
+        }
+
+        if (execute) {
+            await this.executeTransactionAndSend(sql)
+        } else {
+            return sql
+        }
+    }
+
+    async update(columns = {}, target = {}, execute = true) {
+        const _columns = Object.keys(columns)
+        const _val = _columns.map((m) => {
+            return ` ${m} = ${this.convertToString(columns[m])}`
+        })
+
+        let where = ''
+        if (typeof target === 'object') {
+            let tmp = Object.keys(target).map((item, idx) => {
+                return `${item} = ${this.convertToString(target[item])}`
+            })
+            where = tmp.join(' AND ')
+        } else if (typeof target === 'string') {
+            where = target
+        }
+
+        const sql = `UPDATE ${this.table_name} SET 
+                    ${_val.join(', ')}
+                    WHERE ${where}
+                    `
+        if (execute) {
+            await this.executeTransactionAndSend([sql])
+        } else {
+            return sql
+        }
+    }
+    async deleteR(target = {}, execute = true) {
+        const _columns = Object.keys(target)
+        let sql_where = ''
+        _columns.forEach((col, idx) => {
+            if (idx > 0) {
+                sql_where += ' AND ' + `${col} = ${this.convertToString(target[col])}`
+            } else {
+                sql_where += `WHERE ${col} = ${this.convertToString(target[col])}`
+            }
+        })
+        const sql = `DELETE ${this.table_name} ${sql_where}`
+        if (execute) {
+            await this.executeTransactionAndSend([sql])
+        }
+        return sql
     }
 }
 
