@@ -311,6 +311,82 @@ class ExecuteSQL extends ExecuteSQLNoRes {
             }
         }
     }
+
+    async executeTransactionAndSend(queries = [], params = []) {
+        let connection = null
+        
+        try {
+            // Validate queries
+            if (!Array.isArray(queries) || queries.length === 0) {
+                throw new Error('Invalid queries provided for transaction')
+            }
+
+            // Get connection from pool
+            connection = await getConnection()
+
+            // Start transaction
+            await connection.beginTransaction()
+
+            // Execute all queries in transaction
+            const results = []
+            for (let i = 0; i < queries.length; i++) {
+                const query = queries[i]
+                const queryParams = Array.isArray(params[i]) ? params[i] : []
+                
+                console.log(`Executing query ${i + 1}:`, query)
+                const [rows] = await connection.execute(query, queryParams)
+                results.push(rows)
+            }
+
+            // Commit transaction
+            await connection.commit()
+            console.log('Transaction completed successfully')
+
+            // Send success response
+            this.res.send(view({
+                status: 'success',
+                message: 'Transaction completed successfully',
+                results: results
+            }))
+
+        } catch (error) {
+            // Rollback transaction on error
+            if (connection) {
+                try {
+                    await connection.rollback()
+                    console.log('Transaction rolled back due to error')
+                } catch (rollbackError) {
+                    console.error('Error during rollback:', rollbackError)
+                }
+            }
+
+            let message = this.checkMessage(error.message)
+            console.error('Transaction error:', message)
+            this.res.send(view(message, false))
+            throw new Error(message)
+
+        } finally {
+            // Always release connection back to pool
+            if (connection) {
+                connection.release()
+            }
+        }
+    }
+    async checkDuplicate(obj = {}, table_name = '') {
+        return new Promise(async (resolve, reject) => {
+            const columns = Object.keys(obj)
+            const _where = columns.map((c) => `${c} = '${obj[c]}'`)
+            const sql = `SELECT ${columns.join(', ')} FROM ${table_name} WHERE ${_where.join(
+                ' AND ',
+            )}`
+            const result = await this.executeSQL(sql)
+            if (result.length > 0) {
+                resolve(this.res.send(view(true)))
+            } else {
+                resolve(this.res.send(view(false)))
+            }
+        })
+    }
 }
 
 class ExCRUD extends ExecuteSQL {
@@ -471,24 +547,37 @@ class ExCRUD extends ExecuteSQL {
     }
 
     async autoID(column, digit = 1, preFix = '', middle = '') {
-        const sql = `SELECT TOP 1 ${column} 
-                    FROM ${this.table_name} 
-                    WHERE ${column} 
-                    LIKE '${preFix + middle}%'
-                    ORDER BY ${column} DESC
-                    `
-        let new_id = '0'.repeat(digit - 1) + '1'
-        // console.log('sql: ', sql)
-        let last_id = await this.executeSQL(sql)
-        if (last_id.length === 0) {
-            new_id = `${preFix}${middle}${new_id}`
-            return new_id
-        }
+        try {
+            // MySQL syntax - use LIMIT instead of TOP and use prepared statements
+            const sql = `SELECT ${column} 
+                        FROM ${this.table_name} 
+                        WHERE ${column} LIKE ? 
+                        ORDER BY ${column} DESC 
+                        LIMIT 1`
+            
+            const searchPattern = `${preFix}${middle}%`
+            let new_id = '0'.repeat(digit - 1) + '1'
+            
+            let last_id = await this.executeSQL(sql, [searchPattern])
+            
+            if (last_id.length === 0) {
+                new_id = `${preFix}${middle}${new_id}`
+                return new_id
+            }
 
-        last_id = Number(last_id[0][column].replace(`${preFix}${middle}`, '')) + 1
-        new_id =
-            preFix + middle + '0'.repeat(digit - last_id.toString().length) + last_id.toString()
-        return new_id
+            // Extract the numeric part and increment
+            const lastIdValue = last_id[0][column].replace(`${preFix}${middle}`, '')
+            const nextNum = Number(lastIdValue) + 1
+            
+            // Pad with zeros to maintain digit length
+            const paddedNum = nextNum.toString().padStart(digit, '0')
+            new_id = preFix + middle + paddedNum
+            
+            return new_id
+        } catch (error) {
+            console.error('Error generating auto ID:', error)
+            throw error
+        }
     }
 
     convertToString = (s) => {

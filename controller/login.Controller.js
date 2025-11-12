@@ -20,7 +20,7 @@ async function login(req, res) {
   if (result_check.status === 'failed') return res.send(viewFailed(result_check.message))
   if (result_check.length === 0) return res.send(viewFailed('ไม่พบ USER'))
 
-  const check_password = `SELECT user_id,prefix,fullname,user_level,position_id
+  const check_password = `SELECT user_id,prefix,fullname,user_level,role_id
                                 ,is_active 
                                 FROM users
                                 WHERE user_id='${user_id}' 

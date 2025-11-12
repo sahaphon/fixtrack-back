@@ -29,18 +29,29 @@ async function addMenus(req, res) {
                     '${moment().format('YYYY-MM-DD HH:mm:ss')}') `)
 
     let permissions = []
-    users.forEach((value) => {
-        let have_permit = false
-        // for (const permit of permit_list) {
-        //     have_permit = have_permit || value[permit]
-        // }
-        // if (have_permit)
-        //     for (const permit of permit_list) {
-        //         permissions.push(
-        //             `( '${value.emp_id}','${new_menu_id}','${permit}',${value[permit] ? 1 : 0})`,
-        //         )
-        //     }
+ 
+    users.forEach(value => {
+        strSql = `INSERT INTO user_permit (user_id,menu_id,open_count,action_open,action_view,
+                action_add,action_edit,action_delete,action_copy,action_confirm,action_cancel, 
+                action_print,action_other)
+                    VALUES (
+                        '${value.user_id}',
+                        '${strNewID}',
+                        0,
+                        ${value.action_view ? 1 : 0},
+                        ${value.action_open ? 1 : 0},
+                        ${value.action_add ? 1 : 0},
+                        ${value.action_edit ? 1 : 0},
+                        ${value.action_delete ? 1 : 0},
+                        ${value.action_copy ? 1 : 0},
+                        ${value.action_confirm ? 1 : 0},
+                        ${value.action_cancel ? 1 : 0},
+                        ${value.action_print ? 1 : 0},
+                        ${value.action_other ? 1 : 0}
+                        )`
+            SQLList.push(strSql)
     })
+
 
     const chunkSize = 500
     for (let i = 0; i < permissions.length; i += chunkSize) {
@@ -48,6 +59,7 @@ async function addMenus(req, res) {
         SQLList.push(`INSERT INTO user_permit VALUES ${chunk.join()}`)
     }
 
+    console.log("SQLList: ", SQLList);
     await db.executeTransactionAndSend(SQLList)
 }
 
@@ -169,7 +181,7 @@ async function getMenuDetail(req, res) {
             return res.send(viewFailed(`Not found menu:${menu_id}`))
         }
 
-        strSql = `SELECT up.user_id,u.emp_id,u.prefix + ' ' + u.fullname,
+        strSql = `SELECT up.user_id,u.emp_id,CONCAT_WS('', u.prefix, u.fullname) AS full_name,
                 action_open,action_view,action_add,action_edit,
                 action_delete,action_print,action_confirm,
                 action_cancel,action_calculate,action_other
@@ -180,9 +192,7 @@ async function getMenuDetail(req, res) {
 
         const users = await db.executeSQL(strSql)
         console.log("users: ", users);
-        // const registered_users = await db.executeSQL(`
-        //     SELECT r.emp_id,e.name_th , e.surname_th ,e.name_eng,e.surname_eng,r.last_login FROM [OEE].[dbo].[registered] r 
-        //         LEFT JOIN [Employees].[dbo].[employees] e ON  e.emp_id = r.emp_id `)
+
         return res.send(
             view({
                 ...menu[0],
@@ -190,11 +200,13 @@ async function getMenuDetail(req, res) {
                     const user_permit = users.find((e) => e.user_id === value.user_id)
                     return user_permit
                         ? {
+                              user_id: value.user_id,
                               emp_id: user_permit.emp_id,
-                              name_th: user_permit.name_th,
-                              surname_th: user_permit.surname_th,
-                              name_eng: user_permit.name_eng,
-                              surname_eng: user_permit.surname_eng,
+                              full_name: value.full_name,
+                            //   name_th: user_permit.name_th,
+                            //   surname_th: user_permit.surname_th,
+                            //   name_eng: user_permit.name_eng,
+                            //   surname_eng: user_permit.surname_eng,
                               action_open: user_permit.action_open,
                               action_view: user_permit.action_view,
                               action_add: user_permit.action_add,
@@ -207,11 +219,12 @@ async function getMenuDetail(req, res) {
                               action_other: user_permit.action_other,
                           }
                         : {
+                              user_id: value.user_id,
                               emp_id: value.emp_id,
-                              name_th: value.name_th,
-                              surname_th: value.surname_th,
-                              name_eng: value.name_eng,
-                              surname_eng: value.surname_eng,
+                              full_name: value.full_name,
+                            //   surname_th: value.surname_th,
+                            //   name_eng: value.name_eng,
+                            //   surname_eng: value.surname_eng,
                               action_open: false,
                               action_view: false,
                               action_add: false,
@@ -239,13 +252,16 @@ async function getNavigation(req, res) {
         const db = new ExecuteSQL(res)
 
         const actionOpen = (menu_id, link, menu) => {
+            console.log('Checking menu access for:', menu_id, 'Available menus:', Object.keys(menu))
             if (menu_id in menu) {
-                if (menu[menu_id]['action_open']) {
+                // console.log('Menu found:', menu[menu_id])
+                if (menu[menu_id].action_open === true || menu[menu_id].action_open === 1) {
                     return { to: link }
                 } else {
                     return { addLinkClass: 'c-disabled', disabled: true }
                 }
             } else {
+                console.log('Menu not found for:', menu_id)
                 return { addLinkClass: 'c-disabled', disabled: true }
             }
         }
@@ -260,13 +276,39 @@ async function getNavigation(req, res) {
                 `)
 
         let menu = {}
-        // console.log('permission', permission)
+        // console.log('Raw Permission: ', permission)
+        
         permission.forEach((element) => {
             if (!(element.menu_id in menu)) {
-                menu[element.menu_id] = { menu_name: element.menu_name }
+                menu[element.menu_id] = { 
+                    menu_name: element.menu_name,
+                    action_open: false,
+                    action_view: false,
+                    action_add: false,
+                    action_edit: false,
+                    action_delete: false,
+                    action_print: false,
+                    action_confirm: false,
+                    action_cancel: false,
+                    action_calculate: false,
+                    action_other: false
+                }
             }
-            menu[element.menu_id][element.permit] = element.enable
+            
+            // Map all action permissions from the database
+            menu[element.menu_id].action_open = element.action_open || false
+            menu[element.menu_id].action_view = element.action_view || false
+            menu[element.menu_id].action_add = element.action_add || false
+            menu[element.menu_id].action_edit = element.action_edit || false
+            menu[element.menu_id].action_delete = element.action_delete || false
+            menu[element.menu_id].action_print = element.action_print || false
+            menu[element.menu_id].action_confirm = element.action_confirm || false
+            menu[element.menu_id].action_cancel = element.action_cancel || false
+            menu[element.menu_id].action_calculate = element.action_calculate || false
+            menu[element.menu_id].action_other = element.action_other || false
         })
+        
+        // console.log('Formatted Permission: ', menu)
 
         let nav = [
             // {
@@ -277,9 +319,21 @@ async function getNavigation(req, res) {
             // },
             {
                 name: 'ใบสั่งซ่อม',
-                icon: 'cilDocument',
+                icon: 'cilDescription',
                 _tag: 'CSidebarNavItem',
-                ...actionOpen('M002', '/repair-order', menu),
+                ...actionOpen('M003', '/repair', menu),
+            },
+            {
+                name: 'ใบเปิดงาน',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M004', '/workorder', menu),
+            },
+           {
+                name: 'ใบสั่งจ่ายเครื่องจักร',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M005', '/vehicleout', menu),
             },
             // {
             //     name: 'มาสเตอร์',

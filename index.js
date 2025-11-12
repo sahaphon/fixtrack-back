@@ -30,4 +30,6 @@ app.use(url + '/menus', isNotChrSpecial, require('./routes/menu')) //authenticat
 
 app.use(url + '/departments', isNotChrSpecial, require('./routes/master/department')) //authenticated
 app.use(url + '/divisions', isNotChrSpecial, require('./routes/master/division')) //authenticated
-app.use(url + '/positions', isNotChrSpecial, require('./routes/master/position')) //authenticated
+app.use(url + '/role', isNotChrSpecial, require('./routes/master/role')) //authenticated
+
+app.use(url + '/repair', isNotChrSpecial, require('./routes/repairOrder')) //authenticated

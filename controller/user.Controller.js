@@ -80,9 +80,8 @@ async function getUsers(req, res) {
                     'dp.dep_name',
                     'u.division_id',
                     'dv.division_name',
-                    'u.level_id',
-                    'lv.level_name',
-                    'po.position_name',
+                    'rol.role_id',
+                    'rol.role_name_th',
                     'u.created_by',
                     'u.created_date',
                     'u.edit_by',
@@ -98,8 +97,7 @@ async function getUsers(req, res) {
                 join: `
                     LEFT JOIN department dp ON dp.dep_code = u.dep_code
                     LEFT JOIN division dv ON dv.division_id = u.division_id
-                    LEFT JOIN level lv ON lv.level_id = u.level_id
-                    LEFT JOIN position po ON po.position_id = u.position_id
+                    LEFT JOIN role_master rol ON rol.role_id = u.role_id
                 `,
             },
             (send = true),
@@ -120,12 +118,11 @@ async function getUserDetail(req, res) {
         await db.checkUndefinedParams({ user_id })
 
         const strSql = `SELECT u.is_active,IFNULL(u.emp_id, '') emp_id,u.user_level,u.last_login
-                            ,u.prefix,u.fullname,u.position_id,u.dep_code
-                            ,u.division_id,u.level_id,dp.dep_code AS department_id
+                            ,u.prefix,u.fullname,u.role_id,u.dep_code
+                            ,u.division_id,dp.dep_code AS department_id
                             ,dp.dep_name AS department_name
                             ,dv.division_id,dv.division_name
-                            ,lv.level_name AS position
-                            ,po.position_id,po.position_name
+                            ,rm.role_name_th AS role_name
                             ,m.menu_id,m.menu_name
                             ,up.action_open,up.action_view,up.action_add,up.action_edit
                             ,up.action_delete,up.action_print,up.action_confirm
@@ -135,27 +132,12 @@ async function getUserDetail(req, res) {
                             LEFT JOIN menu m ON up.menu_id = m.menu_id
                             LEFT JOIN division dv ON dv.division_id = u.division_id
                             LEFT JOIN department dp ON dp.dep_code = u.dep_code
-                            LEFT JOIN level lv ON lv.level_id = u.level_id
-                            LEFT JOIN position po ON po.position_id = u.position_id
+                            LEFT JOIN role_master rm ON rm.role_id = u.role_id
                             WHERE u.user_id ='${user_id}'
                             ORDER BY m.menu_id`
                           
         const result = await db.executeSQL(strSql)
         const menu = await db.executeSQL(`SELECT menu_id,menu_name FROM menu`)
-        // const signData = await db.executeSQL(
-        //     `SELECT [position],[group] FROM user_sign WHERE user_id = '${user_id}'`,
-        // )
-
-        // let sign = {}
-        // console.log(signData)
-        // for (const s of signData) {
-        //     console.log(s)
-        //     if (!(s.position in sign)) {
-        //         sign[s.position] = [s.group]
-        //     } else {
-        //         sign[s.position].push(s.group)
-        //     }
-        // }
 
         return res.send(
             view({
@@ -163,8 +145,8 @@ async function getUserDetail(req, res) {
                 emp_id: result[0].emp_id,
                 name: result[0].prefix + ' ' + result[0].fullname,
                 user_level: result[0].user_level,
-                position_id: result[0].position_id,
-                position_name: result[0].position_name,
+                role_id: result[0].role_id,
+                role_name: result[0].role_name,
                 department_id: result[0].department_id,
                 department_name: result[0].department_name,
                 division_id: result[0].division_id,
@@ -186,7 +168,7 @@ async function getUserDetail(req, res) {
                               action_print: user_permit.action_print,
                               action_confirm: user_permit.action_confirm,
                               action_cancel: user_permit.action_cancel,
-                            //   action_calculate: user_permit.action_calculate,
+                              action_calculate: user_permit.action_calculate,
                               action_other: user_permit.action_other,
                           }
                         : {
@@ -200,7 +182,7 @@ async function getUserDetail(req, res) {
                               action_print: false,
                               action_confirm: false,
                               action_cancel: false,
-                            //   action_calculate: false,
+                              action_calculate: false,
                               action_other: false,
                           }
                 }),
@@ -221,7 +203,7 @@ async function getProfile(req, res) {
         const { user_id } = req.body
 
         await db.checkUndefinedParams({ user_id })
-        const check_password = `SELECT prefix,fullname,position_id,dep_code,user_level,is_active 
+        const check_password = `SELECT prefix,fullname,role_id,dep_code,user_level,is_active 
                                 FROM users WHERE user_id ='${user_id}'`
 
         const result_check_password = await db.executeSQL(check_password)
@@ -407,8 +389,8 @@ async function getAllUser(req, res) {
     const db = new ExecuteSQL(res)
 
     await db.executeSQLAndSend(`
-        SELECT r.emp_id,e.name_th , e.surname_th ,e.name_eng , e.surname_eng  FROM [OEE].[dbo].[registered] r 
-            LEFT JOIN [Employees].[dbo].[employees] e ON  e.emp_id = r.emp_id `)
+        SELECT user_id,emp_id, CONCAT_WS(' ', prefix, fullname) AS full_name
+        FROM users`)
 }
 
 async function changePassword(req, res) {

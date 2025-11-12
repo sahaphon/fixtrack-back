@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fixtrack System</title>
+    <style>
+        body {
+            font-family: 'Sarabun', Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 2.5em;
+        }
+        .status {
+            background: #e8f5e8;
+            color: #2d5a2d;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #4caf50;
+        }
+        .api-info {
+            background: #f0f7ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        .api-info h3 {
+            color: #1976d2;
+            margin-top: 0;
+        }
+        .endpoint {
+            background: #f5f5f5;
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #d32f2f;
+        }
+        .btn {
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Fixtrack System</h1>
+        
+        <div class="status">
+            ✅ เซิร์ฟเวอร์ทำงานปกติ
+        </div>
+        
+        <p>ระบบจัดการงานซ่อมบำรุง (Maintenance Management System)</p>
+        
+        <div class="api-info">
+            <h3>📡 API Endpoints ที่พร้อมใช้งาน:</h3>
+            <div class="endpoint">POST /api/login - เข้าสู่ระบบ</div>
+            <div class="endpoint">GET /api/users - จัดการผู้ใช้งาน</div>
+            <div class="endpoint">GET /api/menus - เมนูระบบ</div>
+            <div class="endpoint">GET /api/departments - ข้อมูลแผนก</div>
+            <div class="endpoint">GET /api/divisions - ข้อมูลหน่วยงาน</div>
+            <div class="endpoint">GET /api/positions - ข้อมูลตำแหน่ง</div>
+        </div>
+        
+        <button class="btn" onclick="testConnection()">🔍 ทดสอบการเชื่อมต่อ API</button>
+        <button class="btn" onclick="viewDocs()">📚 ดูเอกสาร API</button>
+        
+        <script>
+            function testConnection() {
+                fetch('/api/menus', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert('✅ การเชื่อมต่อ API สำเร็จ!\\n\\nResponse: ' + JSON.stringify(data, null, 2));
+                })
+                .catch(error => {
+                    alert('❌ เกิดข้อผิดพลาด: ' + error.message);
+                });
+            }
+            
+            function viewDocs() {
+                alert('📋 API Documentation\\n\\n' +
+                     'Base URL: http://localhost:3000/api\\n\\n' +
+                     'Authentication: ส่ง token ใน Header Authorization\\n' +
+                     'Content-Type: application/json\\n\\n' +
+                     'ตัวอย่างการใช้งาน:\\n' +
+                     'POST /api/login\\n' +
+                     '{ "username": "admin", "password": "password" }');
+            }
+            
+            // Auto-refresh connection status
+            setInterval(() => {
+                fetch('/api/menus')
+                .then(response => {
+                    const statusEl = document.querySelector('.status');
+                    if (response.ok) {
+                        statusEl.innerHTML = '✅ เซิร์ฟเวอร์ทำงานปกติ - ' + new Date().toLocaleTimeString('th-TH');
+                        statusEl.style.background = '#e8f5e8';
+                        statusEl.style.color = '#2d5a2d';
+                    }
+                })
+                .catch(() => {
+                    const statusEl = document.querySelector('.status');
+                    statusEl.innerHTML = '❌ เซิร์ฟเวอร์ไม่ตอบสนอง';
+                    statusEl.style.background = '#ffe8e8';
+                    statusEl.style.color = '#d32f2f';
+                });
+            }, 30000); // Check every 30 seconds
+        </script>
+    </div>
+</body>
+</html>
