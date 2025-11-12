@@ -252,7 +252,7 @@ async function getNavigation(req, res) {
         const db = new ExecuteSQL(res)
 
         const actionOpen = (menu_id, link, menu) => {
-            console.log('Checking menu access for:', menu_id, 'Available menus:', Object.keys(menu))
+            // console.log('Checking menu access for:', menu_id, 'Available menus:', Object.keys(menu))
             if (menu_id in menu) {
                 // console.log('Menu found:', menu[menu_id])
                 if (menu[menu_id].action_open === true || menu[menu_id].action_open === 1) {
@@ -327,13 +327,37 @@ async function getNavigation(req, res) {
                 name: 'ใบเปิดงาน',
                 icon: 'cilDescription',
                 _tag: 'CSidebarNavItem',
-                ...actionOpen('M004', '/workorder', menu),
+                ...actionOpen('M004', '/pmorder', menu),
             },
-           {
+            { 
                 name: 'ใบสั่งจ่ายเครื่องจักร',
                 icon: 'cilDescription',
                 _tag: 'CSidebarNavItem',
-                ...actionOpen('M005', '/vehicleout', menu),
+                ...actionOpen('M005', '/checkoutorder', menu),
+            },
+            { 
+                name: 'ใบเสนอราคา Supplier',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M006', '/supplierquote', menu),
+            },
+            {
+                name: 'ใบเบิกวัสดุ',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M007', '/issueslip', menu),
+            },
+            {
+                name: 'ใบคืนวัสดุ',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M008', '/returnold', menu),
+            },
+         {
+                name: 'ใบปิดงาน',
+                icon: 'cilDescription',
+                _tag: 'CSidebarNavItem',
+                ...actionOpen('M009', '/jobclose', menu),
             },
             // {
             //     name: 'มาสเตอร์',
