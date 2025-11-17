@@ -1,7 +1,21 @@
-const { ExCRUD } = require('../../db')
+const { ExCRUD, ExecuteSQL } = require('../../db')
 const { viewFailed, view, paramRequired, viewParamRequest } = require('../../utils/views')
 
 async function getAllFireStation(req, res) {
+    try {   
+        const db = new ExecuteSQL(res, '')
+        const sql = `SELECT station_code, station_name, division_id FROM station ORDER BY station_code ASC`
+        const result = await db.executeSQL(sql)
+        res.send(view(result))
+    } catch (e) {
+        res.send(viewFailed(e.message || e))
+        if (e.message) {
+            throw new Error(e)
+        }
+    }
+}
+
+async function getFireStation(req, res) {
      try {
         const db = new ExCRUD(res, 'station s')
 
@@ -44,4 +58,5 @@ async function getAllFireStation(req, res) {
 
 module.exports = {
     getAllFireStation,
+    getFireStation,
 }

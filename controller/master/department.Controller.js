@@ -1,6 +1,20 @@
 const { ExecuteSQL, ExCRUD } = require('../../db')
 const { viewFailed, view, paramRequired, viewParamRequest } = require('../../utils/views')
 
+async function getAllDepartments(req, res) {
+    try {
+        const db = new ExecuteSQL(res, '')
+        const sql = `SELECT dep_code, dep_name, division_id FROM department ORDER BY dep_code ASC`
+        const result = await db.executeSQL(sql)
+        res.send(view(result))
+    } catch (e) {
+        res.send(viewFailed(e.message || e))
+        if (e.message) {
+            throw new Error(e)
+        }
+    }
+}
+
 async function getDepartments(req, res) {
      try {
         const db = new ExCRUD(res, 'department')
@@ -39,5 +53,6 @@ async function getDepartments(req, res) {
 }
 
 module.exports = {
+    getAllDepartments,
     getDepartments,
 }

@@ -1,9 +1,11 @@
 const express = require('express')
 const router = express.Router()
 const { 
-    getDivision
+    getDivision,
+    getAllDivisions
  } = require('../../controller/master/division.Controller')
 
-router.post('/', getDivision)
+router.post('/', getAllDivisions)
+router.post('/get', getDivision)
 
 module.exports = router

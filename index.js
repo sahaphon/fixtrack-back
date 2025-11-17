@@ -28,6 +28,7 @@ app.use(url + '/login', require('./routes/login'))
 app.use(url + '/users', isNotChrSpecial, require('./routes/users')) //authenticated
 app.use(url + '/menus', isNotChrSpecial, require('./routes/menu')) //authenticated
 
+app.use(url + '/asset', isNotChrSpecial, require('./routes/master/asset')) //authenticated
 app.use(url + '/departments', isNotChrSpecial, require('./routes/master/department')) //authenticated
 app.use(url + '/divisions', isNotChrSpecial, require('./routes/master/division')) //authenticated
 app.use(url + '/role', isNotChrSpecial, require('./routes/master/role')) //authenticated
