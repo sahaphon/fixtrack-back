@@ -1,32 +1,17 @@
 const { ExCRUD, ExecuteSQL } = require('../../db')
 const { viewFailed, view, paramRequired, viewParamRequest } = require('../../utils/views')
 
-async function getAllAssets(req, res) {
-    try {
-        const db = new ExecuteSQL(res, '')
-        const sql = `SELECT asset_no, asset_name, brand, model, plate_no 
-                        FROM asset ORDER BY asset_no ASC`
-        const result = await db.executeSQL(sql)
-        res.send(view(result))
-    } catch (e) {
-        res.send(viewFailed(e.message || e))
-        if (e.message) {
-            throw new Error(e)
-        }
-    }
-}       
-
-async function getAssets(req, res) {
+async function getAssetsByLimit(req, res) {
      try {
         const db = new ExCRUD(res, 'asset a')
 
         const { offset, limit, search, type_search } = req.body
+        console.log('Request Body:', req.body);
         await db.checkUndefinedParams({ offset, limit, search, type_search })
 
         const ITypeSearch = {
             asset_no: 'a.asset_no',
-            asset_name: 'a.asset_name',
-            asset_type: 'at.description',
+            asset_name: 'a.asset_name'
         }
         await db.checkInterface(ITypeSearch, type_search, search)
 
@@ -53,16 +38,14 @@ async function getAssets(req, res) {
                 offset,
             },
             (send = true),
+            log = true
         )
     } catch (e) {
+        console.error(e);
         res.send(viewFailed(e.message || e))
-        if (e.message) {
-            throw new Error(e)
-        }
     }
 }
 
 module.exports = {
-    getAllAssets,
-    getAssets,
+    getAssetsByLimit,
 }       

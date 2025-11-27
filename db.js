@@ -421,6 +421,7 @@ class ExCRUD extends ExecuteSQL {
             convert = {},
         },
         send = true,
+        log = false,
     ) {
         let sql_where = search.s_value
         if (sql_where !== '') {
@@ -450,7 +451,7 @@ class ExCRUD extends ExecuteSQL {
                             ${join}
                             ${sql_where}
                           `
-        // console.log("sql: ", total_row_sql);
+        console.log(total_row_sql);
         let total_record = await this.executeSQL(total_row_sql)
         total_record = total_record[0].total_record
 
@@ -466,7 +467,7 @@ class ExCRUD extends ExecuteSQL {
                     ORDER BY ${order} 
                     ${query_offset}`
 
-        // console.log("sql: ", sql);
+        console.log(sql);
         let result = await this.executeSQL(sql)
         const col_convert = Object.keys(convert)
         col_convert.forEach((col) => {

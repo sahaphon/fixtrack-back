@@ -1,11 +1,9 @@
 const express = require('express')
 const router = express.Router()
 const { 
-    getAllAssets,
-    getAssets,
+    getAssetsByLimit,
  } = require('../../controller/master/asset.Controller')
 
-router.post('/', getAllAssets)
-router.post('/get', getAssets)
+router.post('/', getAssetsByLimit)
 
 module.exports = router
